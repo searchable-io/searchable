@@ -127,6 +127,13 @@ Adic
 assertj
 HWPF
 norconex
+
+# Language-detection libraries / identifiers
+pemistahl
+lingua
+langdetect
+optimaize
+agentic
 OOXML
 soffice
 
