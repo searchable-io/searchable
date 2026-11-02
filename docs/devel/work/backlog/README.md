@@ -17,7 +17,7 @@
 | [BACKLOG-002](backlog-002-google-docs-apple-pages.md) | Google Docs / Apple Pages 連携（PDF 変換経由） |
 | [BACKLOG-003](backlog-003-user-role-authz.md) | ユーザー / ロール管理（認可）実装 |
 | [BACKLOG-004](backlog-004-index-encryption.md) | インデックスデータの暗号化保存 |
-| [BACKLOG-005](backlog-005-search-filter-plugin-spi.md) | カスタム検索フィルタープラグイン SPI |
+| [BACKLOG-005](backlog-005-search-filter-plugin-spi.md) | カスタム検索フィルタープラグイン SPI（→ M5 TASK-021 に昇格） |
 | [BACKLOG-006](backlog-006-document-parser-plugin-spi.md) | 文書パーサープラグイン SPI |
 | [BACKLOG-007](backlog-007-scoring-plugin-spi.md) | カスタムスコアリングプラグイン SPI |
 | [BACKLOG-008](backlog-008-mcp-index-update.md) | MCP 経由のインデックス更新 |
@@ -32,4 +32,4 @@
 
 ---
 
-**Last Updated**: 2026-06-10
+**Last Updated**: 2026-11-02
