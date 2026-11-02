@@ -123,8 +123,8 @@ curl -X POST http://localhost:8080/api/v1/search \
 If the `hits` array contains `doc-1`, it worked.
 
 For bulk ingestion of multiple documents and the full list of APIs, see
-[examples/api/README.md](../examples/api/README.md) and
-[api-specification.ja.md](../examples/api/api-specification.ja.md).
+[examples/api/README.md](../../examples/api/README.md) and
+[api-specification.ja.md](../../examples/api/api-specification.ja.md).
 
 ---
 
@@ -195,7 +195,7 @@ persistence:
   password: ""
 ```
 
-> See [ADR-0002](adr/0002-data-directory-relative-path-resolution.md) for
+> See [ADR-0002](../devel/adr/0002-data-directory-relative-path-resolution.md) for
 > the path resolution policy. An absolute path is always honored as-is.
 > If you omit `index.directory`, `<data-directory>/indexes` is used
 > automatically.
@@ -342,9 +342,9 @@ curl -X POST http://localhost:8080/api/v1/index/documents \
 - All CLI subcommands: [cli-guide.md](cli-guide.md)
 - Embedding it in your own app: [usage.md](usage.md)
 - All REST API endpoints:
-  [examples/api/README.md](../examples/api/README.md) /
-  [api-specification.ja.md](../examples/api/api-specification.ja.md)
-- Design philosophy and internals: [architecture.md](architecture.md)
+  [examples/api/README.md](../../examples/api/README.md) /
+  [api-specification.ja.md](../../examples/api/api-specification.ja.md)
+- Design philosophy and internals: [Architecture overview (Japanese)](../devel/design/architecture/overview.md)
 
 ## When things go wrong
 

@@ -205,7 +205,7 @@ During the migration window, the document list screen in admin /
 webapp may appear empty, so plan and execute `rebuild` + `ingest`
 accordingly.
 
-## 8. Running tests
+## 9. Running tests
 
 ```bash
 # All modules
@@ -218,7 +218,7 @@ mvn -B -pl searchable-core -am test
 mvn -B -pl searchable-api -am test
 ```
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 ### Port already in use
 

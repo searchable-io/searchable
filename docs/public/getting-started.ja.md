@@ -118,8 +118,8 @@ curl -X POST http://localhost:8080/api/v1/search \
 
 `hits` 配列に `doc-1` が含まれていれば成功。
 
-複数件の一括取込・全 API 一覧は [examples/api/README.md](../examples/api/README.md)
-および [api-specification.ja.md](../examples/api/api-specification.ja.md) を参照。
+複数件の一括取込・全 API 一覧は [examples/api/README.md](../../examples/api/README.md)
+および [api-specification.ja.md](../../examples/api/api-specification.ja.md) を参照。
 
 ---
 
@@ -187,7 +187,7 @@ persistence:
   password: ""
 ```
 
-> パス解決の方針は [ADR-0002](adr/0002-data-directory-relative-path-resolution.md)
+> パス解決の方針は [ADR-0002](../devel/adr/0002-data-directory-relative-path-resolution.md)
 > を参照。絶対パスを書けば常にそこが使われる。`index.directory` を省略すると
 > `<data-directory>/indexes` が自動で採用される。
 
@@ -316,8 +316,8 @@ curl -X POST http://localhost:8080/api/v1/index/documents \
 - 設定項目と運用手順の全体像: [setup-guide.md](setup-guide.md)
 - CLI の全サブコマンド: [cli-guide.ja.md](cli-guide.ja.md)
 - 自分のアプリに組み込んで使う: [usage.ja.md](usage.ja.md)
-- REST API の全エンドポイント: [examples/api/README.md](../examples/api/README.md) / [api-specification.ja.md](../examples/api/api-specification.ja.md)
-- 設計思想と内部構造: [architecture.md](architecture.md)
+- REST API の全エンドポイント: [examples/api/README.md](../../examples/api/README.md) / [api-specification.ja.md](../../examples/api/api-specification.ja.md)
+- 設計思想と内部構造: [アーキテクチャ設計](../devel/design/architecture/overview.md)
 
 ## 困ったときは
 

@@ -485,6 +485,12 @@ components:
         filters:
           type: object
           additionalProperties: true
+          description: |
+            Reserved. The field is accepted and carried into the search
+            request, but release 1.0.0 does not apply it: neither the
+            full-text nor the vector searcher reads these values, so the
+            response is not narrowed. Filter in the client until this is
+            implemented.
     SearchHit:
       type: object
       properties:

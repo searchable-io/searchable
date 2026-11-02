@@ -198,7 +198,7 @@ java -jar searchable-cli.jar --config ./searchable.yaml \
 移行期間中は admin / webapp の文書一覧画面が空に見える可能性が
 あるため、計画的に `rebuild` + `ingest` を実施してください。
 
-## 8. テスト実行
+## 9. テスト実行
 
 ```bash
 # 全モジュール
@@ -211,7 +211,7 @@ mvn -B -pl searchable-core -am test
 mvn -B -pl searchable-api -am test
 ```
 
-## 9. トラブルシューティング
+## 10. トラブルシューティング
 
 ### ポートが使用中
 

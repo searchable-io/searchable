@@ -65,7 +65,17 @@ back-ends and AI-tool integrations.
 
 **1.0.0 (stable).** Core API surface is committed; subsequent releases
 follow semantic versioning — additive changes in 1.x minors, breaking
-changes deferred to 2.0.
+changes deferred to 2.0. Depend on `1.0.0`; the `main` branch carries
+`1.0.1-SNAPSHOT` and is only resolvable after a local
+`./mvnw -B clean install`.
+
+Two capabilities are **not** available in 1.0.0 and are worth checking
+before you adopt the library:
+
+- `SearchRequest.filters` is accepted by the API but **not applied** —
+  see [Known limitations](#-known-limitations).
+- Document-level `metadata` is stored in the metadata DB, not in the
+  Lucene index, so it cannot be used to narrow a query.
 
 See the [roadmap](docs/devel/work/plans/roadmap.md) for follow-up work.
 
@@ -81,7 +91,7 @@ See the [roadmap](docs/devel/work/plans/roadmap.md) for follow-up work.
 | Document formats | Plain Text / Markdown / AsciiDoc / HTML / PDF (PDFBox) / Microsoft Office .docx / .doc / .xlsx / .xls / .pptx / .ppt (Apache POI) |
 | Interfaces | Java API (core); CLI (`searchable-cli`); REST API / MCP / webapp as reference apps in [`examples/`](examples/) |
 | Persistence | H2 (default) or PostgreSQL metadata via HikariCP + file-system Lucene indexes |
-| Operations | Backup / restore of Lucene indexes, user dictionary management, admin UI (`searchable-admin`) |
+| Operations | Backup / restore of Lucene indexes, user dictionary management, admin UI (`searchable-admin`), [read-only reader processes](#read-only-mode) |
 
 ---
 
@@ -162,7 +172,7 @@ Drop Searchable into a Maven project as a regular dependency:
 <dependency>
   <groupId>io.github.searchable-io</groupId>
   <artifactId>searchable-core</artifactId>
-  <version>1.0.1-SNAPSHOT</version>
+  <version>1.0.0</version>
 </dependency>
 ```
 
@@ -189,6 +199,42 @@ The `SearchableLibrary.Builder` exposes individual overrides (custom
 embedding provider, in-memory repositories for tests, etc.); see
 [`SearchableLibrary.java`](searchable-core/src/main/java/io/searchable/core/SearchableLibrary.java)
 for the full surface.
+
+### Read-only mode
+
+A writer process and one or more reader processes can share the same
+index directory. Readers open the library with `readOnly(true)`:
+
+```java
+try (SearchableLibrary library = SearchableLibrary.builder()
+        .applicationConfig(config)
+        .readOnly(true)
+        .build()) {
+    // searchService() works; indexService() / namespaceService() throw
+    library.refresh();   // pick up what the writer has committed
+}
+```
+
+| Aspect | Behaviour in read-only mode |
+| --- | --- |
+| `searchService()` | Available |
+| `indexService()`, `namespaceService()` | Throw `IllegalStateException` |
+| Lucene | Opened through a `DirectoryReader`; no `IndexWriter` is created |
+| Metadata DB | Opened normally, so namespace metadata stays readable |
+| Storage backend | `MEMORY` is rejected — a shared index must be on the filesystem |
+
+Readers do not poll on their own. Call `SearchableLibrary.refresh()`
+to re-open the searcher view; it also detects a rebuild that the writer
+has promoted to a new index version and reopens against it. Schedule
+the call yourself, or install
+[`SighupListener`](searchable-core/src/main/java/io/searchable/core/infrastructure/runtime/SighupListener.java)
+so the CLI can trigger a reload with `SIGHUP` after an ingest commit —
+the reference apps under [`examples/`](examples/) do the latter. SIGHUP
+is unavailable on Windows; `isInstalled()` reports `false` and a `WARN`
+line is logged.
+
+The library does not coordinate writers, so keep index writes in a
+single process and point the readers at the same directory.
 
 ---
 
@@ -220,6 +266,10 @@ for the original (pre-JMH) reports.
 > Silicon, `MMapDirectory`, Lucene 10.4.0, JMH 1.37; measured
 > 2026-06-07.
 
+These numbers come from Apple Silicon only. No x86_64 run has been
+published, so do not size a server deployment from this table — re-run
+the JMH harnesses linked above on your target hardware.
+
 ---
 
 ## 🛠️ Technology Stack
@@ -238,8 +288,13 @@ under `examples/search-ui/` is plain HTML + JS.
 | --- | --- |
 | `searchable-core` | Core library: indexing, search, namespaces, persistence |
 | `searchable-plugins` | Plugin API (`DataSourcePlugin` and friends) |
-| `searchable-ai` | Embedding / ONNX integration for vector search |
+| `searchable-ai` | `AiProvider` implementations (Anthropic / OpenAI / Ollama) for summarization and Q&A |
 | `searchable-testkit` | Shared test fixtures for downstream apps |
+
+Vector embeddings do **not** live in `searchable-ai`.
+`OnnxEmbeddingProvider` ships inside `searchable-core`, so vector
+search needs no extra module; add `searchable-ai` only when you want
+LLM post-processing.
 
 **Standalone tools** — operate on the core but run as their own
 process; the embedded surface does not depend on them:
@@ -285,20 +340,43 @@ discovery styles are used:
 
 ---
 
+## 🚧 Known limitations
+
+Behaviour in 1.0.0 that the rest of this README would otherwise imply
+is available. Each item links to the code that defines it.
+
+| Limitation | Detail |
+| --- | --- |
+| `filters` has no effect | `SearchRequest.filters` is carried through `SearchService` and `HybridSearchOrchestrator`, but neither [`LuceneFullTextSearcher`](searchable-core/src/main/java/io/searchable/core/infrastructure/lucene/LuceneFullTextSearcher.java) nor [`LuceneVectorSearcher`](searchable-core/src/main/java/io/searchable/core/infrastructure/lucene/LuceneVectorSearcher.java) reads it. Results come back unfiltered |
+| Document metadata is not indexed | [`LuceneDocumentMapper`](searchable-core/src/main/java/io/searchable/core/infrastructure/lucene/LuceneDocumentMapper.java) keeps document-level `metadata` in the metadata DB. Chunk metadata is written as a `StoredField`, which is retrievable but not searchable |
+| Per-document access control is the application's job | Because neither of the above narrows a query, an app that shows different documents to different users has to over-fetch and filter after the search |
+| Vector hits are not collapsed per document | Full-text search groups chunks by `PARENT_ID`; vector search returns one hit per chunk. In hybrid mode the two inputs to RRF therefore have different granularity |
+| One embedding provider per library | `EmbeddingProvider` is set on `SearchableLibrary.Builder`, not per namespace, so namespaces cannot use different embedding models |
+
+Progress on these is tracked in the
+[roadmap](docs/devel/work/plans/roadmap.md).
+
+---
+
 ## 🧪 CI
 
 GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml))
-runs build + unit tests, integration tests, Checkstyle + SpotBugs, and
-docs lint (markdownlint + Spectral + cspell).
+runs build + unit tests, integration tests, Checkstyle + SpotBugs,
+Javadoc, and docs lint (markdownlint + Spectral + cspell).
 
 | JDK | Distribution | Status |
 | --- | --- | --- |
 | 21 | Eclipse Temurin | All jobs run on this single JDK |
 
-Triggers are currently set to `workflow_dispatch` only while the
-codebase undergoes a large refactor; `push` / `pull_request` triggers
-are commented out and will be restored before 1.0. Multi-JDK matrix
-expansion (e.g. 25 LTS preview) is not yet wired up.
+CI runs on `push` and `pull_request` against `main`, limited to source,
+`pom.xml`, docs, and CI-config paths, and can also be started manually
+with `workflow_dispatch`. Multi-JDK matrix expansion (e.g. 25 LTS
+preview) is not yet wired up.
+
+Releases are published by
+[`.github/workflows/release.yml`](.github/workflows/release.yml): a
+`v*` tag deploys to Sonatype Central, and the job fails unless the tag
+matches the version in `pom.xml`.
 
 ---
 

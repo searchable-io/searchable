@@ -2,7 +2,7 @@
 
 A reference for day-to-day use of Searchable.
 For initial setup, see [getting-started.md](getting-started.md);
-for the exhaustive API specification, see [examples/api/api-specification.md](../examples/api/api-specification.md).
+for the exhaustive API specification, see [examples/api/api-specification.md](../../examples/api/api-specification.ja.md).
 
 ## 1. Choosing a usage form
 
@@ -22,59 +22,76 @@ uses REST for the search service and MCP for AI clients.
 ### 2.1 Initialization
 
 ```java
-SearchableLibrary library = SearchableLibrary.builder()
-    .configPath("/path/to/config.yaml")    // Configure from a file
-    .build();
+SearchableConfig config = new ConfigLoader().load(Path.of("/path/to/searchable.yaml"));
 
-// Or directly from code
-SearchableLibrary library = SearchableLibrary.builder()
-    .dataDirectory("/path/to/data")
-    .persistenceType(PersistenceType.H2)
-    .globalConfig(SearchableGlobalConfig.builder()
-        .defaultSearchArchitecture(SearchArchitecture.HYBRID)
-        .build())
-    .build();
-
-library.start();
+try (SearchableLibrary library = SearchableLibrary.fromConfig(config)) {
+    // ... use the library here
+}
 ```
 
-After use, call `library.shutdown()` to release resources.
+`fromConfig` is shorthand for
+`SearchableLibrary.builder().applicationConfig(config).build()`. Use the
+builder directly to override a default — in-memory repositories for tests,
+a custom `EmbeddingProvider`, or `readOnly(true)` for a search-only process:
+
+```java
+try (SearchableLibrary library = SearchableLibrary.builder()
+        .applicationConfig(config)
+        .readOnly(true)
+        .build()) {
+    // ... search only; indexService() and namespaceService() throw here
+}
+```
+
+`SearchableLibrary` implements `AutoCloseable`. Outside a
+try-with-resources block, call `library.close()` to release the index and
+the metadata DB.
 
 ### 2.2 Namespace operations
 
 ```java
-NamespaceService namespaceService = library.getNamespaceService();
+NamespaceService namespaceService = library.namespaceService();
 
-Namespace namespace = namespaceService.createNamespace(
-    NamespaceCreateRequest.builder()
-        .id("project-a")
-        .name("Project A")
-        .config(NamespaceConfig.builder()
-            .architecture(SearchArchitecture.HYBRID)
-            .searchStrategy(SearchStrategy.PARALLEL)
-            .build())
-        .build());
+Namespace namespace = namespaceService.create(
+    "project-a",
+    "Project A",
+    new NamespaceConfigPatch(
+        SearchType.HYBRID,        // architecture
+        SearchStrategy.PARALLEL,  // searchStrategy
+        null,                     // searchOrder
+        null,                     // embeddingConfig
+        null,                     // aiConfig
+        null,                     // indexWeight
+        null));                   // customParams
 ```
+
+Every field of `NamespaceConfigPatch` is optional; `null` means "fall back
+to the global default". Pass `NamespaceConfigPatch.empty()` to take all of
+them.
 
 ### 2.3 Index registration
 
 ```java
-IndexService indexService = library.getIndexService();
+IndexService indexService = library.indexService();
 
 Document document = Document.builder()
     .id("doc-1")
+    .namespaceId("project-a")
     .title("製品マニュアル")
     .content("Searchable は日本語形態素解析に対応した全文検索ライブラリです。")
     .metadata(Map.of(
-        "url", Path.of("/srv/docs/manual.md").toUri().toString(),  // 推奨: URI で origin を記録
+        "url", Path.of("/srv/docs/manual.md").toUri().toString(),  // record the origin as a URI
         "category", "product",
         "lang", "ja"))
     .build();
 
-indexService.indexDocument("project-a", document);
+indexService.index(document);
 ```
 
-For batch registration, use `indexDocuments(namespaceId, List<Document>)`.
+The target namespace is taken from `Document.namespaceId`, so `index` has
+no namespace argument. For batch registration use
+`indexBatch(namespaceId, List<Document>)`. `indexIfChanged(document)`
+skips the write when the content hash matches what is already indexed.
 
 #### Reserved keys in `Document.metadata`
 
@@ -84,7 +101,7 @@ in the library and the sample UI.
 | Key | Value | Purpose |
 | --- | --- | --- |
 | `url` | **URI** (RFC 3986), scheme required | Origin reference of the document. `file:///abs/path`, `http(s)://...`, `ftp://...`, `s3://bucket/key`, etc. Raw paths (`/abs/path`) are not allowed |
-| `contentType` | **MIME type** | Source format of the document. `text/plain` / `text/markdown` / `text/html` / `text/asciidoc` / `application/pdf`, etc. Office MIME types are also supported. See [architecture.md §5.7](architecture.md) |
+| `contentType` | **MIME type** | Source format of the document. `text/plain` / `text/markdown` / `text/html` / `text/asciidoc` / `application/pdf`, etc. Office MIME types are also supported. See [Architecture overview §5.7 (Japanese)](../devel/design/architecture/overview.md) |
 | `category` | string | For facets |
 | `lang` | string | For facets |
 | `tags` | string or string[] | For facets |
@@ -106,32 +123,34 @@ Document-level metadata (`Document.metadata`) is stored in a **dedicated
 metadata DB** as one row per document (`DocumentMetadataRepository`). It
 is not stored in Lucene's chunk stored fields, so metadata volume does
 not grow linearly as the number of chunks increases. See
-[architecture.md §5.7](architecture.md) for details.
+[Architecture overview §5.7 (Japanese)](../devel/design/architecture/overview.md) for details.
 
 ### 2.4 Search
 
 ```java
-SearchService searchService = library.getSearchService();
+SearchService searchService = library.searchService();
 
 SearchRequest request = SearchRequest.builder()
     .query("形態素解析")
     .namespaceIds(List.of("project-a"))
     .searchType(SearchType.HYBRID)
-    .maxResults(10)
+    .pagination(new PaginationParams(0, 10))
     .build();
 
 SearchResult result = searchService.search(request);
-result.getHits().forEach(hit ->
-    System.out.printf("%s (score=%.2f)%n", hit.getTitle(), hit.getScore()));
+result.hits().forEach(hit ->
+    System.out.printf("%s (score=%.2f)%n", hit.title(), hit.score()));
 ```
 
-The asynchronous variant is `searchAsync(request)`.
+`SearchResult` and `SearchHit` are records, so their accessors have no
+`get` prefix. Result size comes from `PaginationParams(offset, limit)`;
+highlighting, snippet length, and BM25 overrides live in `SearchOptions`.
 
 ## 3. Using as a REST API
 
 A reference implementation of the REST API server is in
-[`examples/api/`](../examples/api/). For detailed startup steps and
-configuration, see [examples/api/README.md](../examples/api/README.md).
+[`examples/api/`](../../examples/api/). For detailed startup steps and
+configuration, see [examples/api/README.md](../../examples/api/README.md).
 
 ### 3.1 Basics
 
@@ -206,7 +225,8 @@ curl -X POST http://localhost:8080/api/v1/search \
 ```
 
 The response includes `hits`, `totalHits`, `maxScore`, and `took`.
-For details of each field, see [examples/api/api-specification.md](../examples/api/api-specification.md).
+For the authoritative request and response shapes, see
+[examples/api/openapi.yaml](../../examples/api/openapi.yaml).
 
 ### 3.5 Main endpoints
 
@@ -218,14 +238,20 @@ For details of each field, see [examples/api/api-specification.md](../examples/a
 | `POST` / `PUT` / `DELETE` | `/api/v1/index/documents[/{id}]` | Document CRUD |
 | `POST` | `/api/v1/index/batch` | Batch registration |
 | `POST` | `/api/v1/index/rebuild` | Index rebuild |
-| `GET` | `/api/v1/admin/status` | System status |
-| `GET` | `/api/v1/admin/metrics` | Metrics |
+| `GET` | `/api/v1/index/{namespaceId}/metadata` | Index status of one namespace |
+| `GET` | `/api/v1/dictionaries` | User dictionary listing |
+| `GET` / `PUT` / `DELETE` | `/api/v1/dictionaries/global` | Global user dictionary |
+| `GET` / `PUT` / `DELETE` | `/api/v1/dictionaries/namespaces/{namespaceId}` | Per-namespace user dictionary |
+
+The reference app exposes no `/api/v1/admin/*` endpoints. Backup,
+restore, and status are available through `searchable-cli` and the Java
+API only.
 
 ## 4. Using as an MCP server
 
 A reference implementation of the MCP server is in
-[`examples/mcp/`](../examples/mcp/). For the full procedure, see
-[examples/mcp/guide.md](../examples/mcp/guide.md).
+[`examples/mcp/`](../../examples/mcp/). For the full procedure, see
+[examples/mcp/guide.md](../../examples/mcp/guide.ja.md).
 
 ### 4.1 Startup
 
@@ -265,7 +291,7 @@ Add to `claude_desktop_config.json`:
 ```
 
 For details of the provided tools (`search_documents`, etc.), see
-[examples/mcp/guide.md](../examples/mcp/guide.md).
+[examples/mcp/guide.md](../../examples/mcp/guide.ja.md).
 
 ## 5. Choosing a search mode
 
@@ -304,6 +330,11 @@ Search options control result formatting.
 
 The left-hand side of `filters` must match the `metadata` key supplied at document registration.
 
+> **`filters` has no effect in 1.0.0.** The field is accepted and passed through the search
+> pipeline, but neither the full-text nor the vector searcher reads it, so the response is
+> unfiltered. Narrow the results in your own code until this is wired up. See
+> [Known limitations](../../README.md#-known-limitations).
+
 ## 7. Managing the index
 
 | Task | API / Operation |
@@ -312,7 +343,7 @@ The left-hand side of `filters` must match the `metadata` key supplied at docume
 | Delete | `DELETE /api/v1/index/documents/{id}?namespaceId=...` |
 | Full rebuild | `POST /api/v1/index/rebuild` |
 | Status check | `indexMetadata` of `GET /api/v1/namespaces/{id}` |
-| Backup / restore | `POST /api/v1/admin/backup` / `/api/v1/admin/restore` |
+| Backup / restore | `searchable backup` / `searchable restore` (CLI), or `BackupService` / `RestoreService` (Java API) |
 
 For initial loading of large data sets, batch registration (`/index/batch`) is recommended.
 
@@ -385,9 +416,9 @@ Main error codes:
 
 ## 12. Learn more
 
-- Exhaustive API coverage: [examples/api/api-specification.md](../examples/api/api-specification.md)
-- Machine-readable definition: [examples/api/openapi.yaml](../examples/api/openapi.yaml)
-- Internal structure: [architecture.md](architecture.md)
+- Exhaustive API coverage: [examples/api/api-specification.md](../../examples/api/api-specification.ja.md)
+- Machine-readable definition: [examples/api/openapi.yaml](../../examples/api/openapi.yaml)
+- Internal structure: [Architecture overview (Japanese)](../devel/design/architecture/overview.md)
 - Vector search details: [vector-search-guide.md](vector-search-guide.md)
 - Chunking behavior: [chunking-guide.md](chunking-guide.md)
 - User dictionary management: [user-dictionary-guide.md](user-dictionary-guide.md)

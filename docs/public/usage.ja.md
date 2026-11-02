@@ -2,7 +2,7 @@
 
 Searchable の日常的な使い方をまとめたリファレンス。
 初回セットアップは [getting-started.ja.md](getting-started.ja.md) を、
-全 API の網羅的な仕様は [examples/api/api-specification.ja.md](../examples/api/api-specification.ja.md) を参照する。
+全 API の網羅的な仕様は [examples/api/api-specification.ja.md](../../examples/api/api-specification.ja.md) を参照する。
 
 ## 1. 利用形態の選び方
 
@@ -21,47 +21,60 @@ Searchable は同じコア機能を 3 つの形態で提供する。
 ### 2.1 初期化
 
 ```java
-SearchableLibrary library = SearchableLibrary.builder()
-    .configPath("/path/to/config.yaml")    // ファイルから設定
-    .build();
+SearchableConfig config = new ConfigLoader().load(Path.of("/path/to/searchable.yaml"));
 
-// もしくはプログラムから直接
-SearchableLibrary library = SearchableLibrary.builder()
-    .dataDirectory("/path/to/data")
-    .persistenceType(PersistenceType.H2)
-    .globalConfig(SearchableGlobalConfig.builder()
-        .defaultSearchArchitecture(SearchArchitecture.HYBRID)
-        .build())
-    .build();
-
-library.start();
+try (SearchableLibrary library = SearchableLibrary.fromConfig(config)) {
+    // ... ここでライブラリを使う
+}
 ```
 
-利用後は `library.shutdown()` でリソースを解放する。
+`fromConfig` は `SearchableLibrary.builder().applicationConfig(config).build()` の短縮形である。
+既定値を変える場合は Builder を直接使う。
+テスト用のインメモリリポジトリ、独自の `EmbeddingProvider`、検索専用プロセス向けの
+`readOnly(true)` などを指定できる。
+
+```java
+try (SearchableLibrary library = SearchableLibrary.builder()
+        .applicationConfig(config)
+        .readOnly(true)
+        .build()) {
+    // ... 検索のみ。indexService() と namespaceService() は例外を投げる
+}
+```
+
+`SearchableLibrary` は `AutoCloseable` を実装している。
+try-with-resources を使わない場合は `library.close()` でインデックスとメタデータ DB を解放する。
 
 ### 2.2 Namespace 操作
 
 ```java
-NamespaceService namespaceService = library.getNamespaceService();
+NamespaceService namespaceService = library.namespaceService();
 
-Namespace namespace = namespaceService.createNamespace(
-    NamespaceCreateRequest.builder()
-        .id("project-a")
-        .name("Project A")
-        .config(NamespaceConfig.builder()
-            .architecture(SearchArchitecture.HYBRID)
-            .searchStrategy(SearchStrategy.PARALLEL)
-            .build())
-        .build());
+Namespace namespace = namespaceService.create(
+    "project-a",
+    "Project A",
+    new NamespaceConfigPatch(
+        SearchType.HYBRID,        // architecture
+        SearchStrategy.PARALLEL,  // searchStrategy
+        null,                     // searchOrder
+        null,                     // embeddingConfig
+        null,                     // aiConfig
+        null,                     // indexWeight
+        null));                   // customParams
 ```
+
+`NamespaceConfigPatch` の各項目は省略できる。
+`null` は全体設定の既定値に従うという意味になる。
+すべて既定値でよければ `NamespaceConfigPatch.empty()` を渡す。
 
 ### 2.3 インデックス登録
 
 ```java
-IndexService indexService = library.getIndexService();
+IndexService indexService = library.indexService();
 
 Document document = Document.builder()
     .id("doc-1")
+    .namespaceId("project-a")
     .title("製品マニュアル")
     .content("Searchable は日本語形態素解析に対応した全文検索ライブラリです。")
     .metadata(Map.of(
@@ -70,10 +83,12 @@ Document document = Document.builder()
         "lang", "ja"))
     .build();
 
-indexService.indexDocument("project-a", document);
+indexService.index(document);
 ```
 
-バッチ登録には `indexDocuments(namespaceId, List<Document>)` を使う。
+登録先の Namespace は `Document.namespaceId` から決まるため、`index` に Namespace の引数はない。
+バッチ登録には `indexBatch(namespaceId, List<Document>)` を使う。
+`indexIfChanged(document)` は、内容のハッシュが登録済みのものと一致する場合に書き込みを省く。
 
 #### `Document.metadata` の予約キー
 
@@ -83,7 +98,7 @@ indexService.indexDocument("project-a", document);
 | キー | 値 | 用途 |
 | --- | --- | --- |
 | `url` | **URI**(RFC 3986)、スキーム必須 | 文書の origin 参照。`file:///abs/path`、`http(s)://...`、`ftp://...`、`s3://bucket/key` 等。生パス(`/abs/path`)は禁止 |
-| `contentType` | **MIME type** | 文書の元フォーマット。`text/plain` / `text/markdown` / `text/html` / `text/asciidoc` / `application/pdf` 等。Office 系 MIME も使用可。詳細は [architecture.md §5.7](architecture.md) |
+| `contentType` | **MIME type** | 文書の元フォーマット。`text/plain` / `text/markdown` / `text/html` / `text/asciidoc` / `application/pdf` 等。Office 系 MIME も使用可。詳細は [アーキテクチャ設計 §5.7](../devel/design/architecture/overview.md) |
 | `category` | string | facet 用 |
 | `lang` | string | facet 用 |
 | `tags` | string or string[] | facet 用 |
@@ -102,31 +117,33 @@ indexService.indexDocument("project-a", document);
 文書レベル metadata(`Document.metadata`)は **専用の metadata DB** に
 1 文書 1 行で保存される(`DocumentMetadataRepository`)。Lucene のチャンク
 stored field には保存されないため、チャンク数が増えても metadata 量は
-線形に増えない。詳細は [architecture.md §5.7](architecture.md) を参照。
+線形に増えない。詳細は [アーキテクチャ設計 §5.7](../devel/design/architecture/overview.md) を参照。
 
 ### 2.4 検索
 
 ```java
-SearchService searchService = library.getSearchService();
+SearchService searchService = library.searchService();
 
 SearchRequest request = SearchRequest.builder()
     .query("形態素解析")
     .namespaceIds(List.of("project-a"))
     .searchType(SearchType.HYBRID)
-    .maxResults(10)
+    .pagination(new PaginationParams(0, 10))
     .build();
 
 SearchResult result = searchService.search(request);
-result.getHits().forEach(hit ->
-    System.out.printf("%s (score=%.2f)%n", hit.getTitle(), hit.getScore()));
+result.hits().forEach(hit ->
+    System.out.printf("%s (score=%.2f)%n", hit.title(), hit.score()));
 ```
 
-非同期版は `searchAsync(request)` を使う。
+`SearchResult` と `SearchHit` は record のため、アクセサーに `get` は付かない。
+取得件数は `PaginationParams(offset, limit)` で指定する。
+ハイライト、スニペット長、BM25 の上書きは `SearchOptions` が持つ。
 
 ## 3. REST API として使う
 
-REST API サーバーは [`examples/api/`](../examples/api/) にリファレンス実装が
-ある。詳細な起動手順と設定は [examples/api/README.md](../examples/api/README.md)
+REST API サーバーは [`examples/api/`](../../examples/api/) にリファレンス実装が
+ある。詳細な起動手順と設定は [examples/api/README.md](../../examples/api/README.md)
 を参照。
 
 ### 3.1 基本情報
@@ -201,7 +218,7 @@ curl -X POST http://localhost:8080/api/v1/search \
 ```
 
 レスポンスは `hits`, `totalHits`, `maxScore`, `took` を含む。
-個別フィールドの詳細は [examples/api/api-specification.ja.md](../examples/api/api-specification.ja.md) 参照。
+個別フィールドの詳細は [examples/api/api-specification.ja.md](../../examples/api/api-specification.ja.md) 参照。
 
 ### 3.5 主なエンドポイント
 
@@ -213,13 +230,18 @@ curl -X POST http://localhost:8080/api/v1/search \
 | `POST` / `PUT` / `DELETE` | `/api/v1/index/documents[/{id}]` | ドキュメント CRUD |
 | `POST` | `/api/v1/index/batch` | バッチ登録 |
 | `POST` | `/api/v1/index/rebuild` | インデックス再構築 |
-| `GET` | `/api/v1/admin/status` | システム状態 |
-| `GET` | `/api/v1/admin/metrics` | メトリクス |
+| `GET` | `/api/v1/index/{namespaceId}/metadata` | Namespace のインデックス状態 |
+| `GET` | `/api/v1/dictionaries` | ユーザー辞書の一覧 |
+| `GET` / `PUT` / `DELETE` | `/api/v1/dictionaries/global` | 全体のユーザー辞書 |
+| `GET` / `PUT` / `DELETE` | `/api/v1/dictionaries/namespaces/{namespaceId}` | Namespace ごとのユーザー辞書 |
+
+リファレンス実装に `/api/v1/admin/*` のエンドポイントはない。
+バックアップ、リストア、状態確認は `searchable-cli` と Java API から行う。
 
 ## 4. MCP サーバーとして使う
 
-MCP サーバーは [`examples/mcp/`](../examples/mcp/) にリファレンス実装がある。
-完全な手順は [examples/mcp/guide.ja.md](../examples/mcp/guide.ja.md) を参照。
+MCP サーバーは [`examples/mcp/`](../../examples/mcp/) にリファレンス実装がある。
+完全な手順は [examples/mcp/guide.ja.md](../../examples/mcp/guide.ja.md) を参照。
 
 ### 4.1 起動
 
@@ -259,7 +281,7 @@ java -jar examples/mcp/target/mcp-example-1.0.1-SNAPSHOT.jar --mode sse --port 8
 ```
 
 提供ツール (`search_documents` など) の詳細は
-[examples/mcp/guide.ja.md](../examples/mcp/guide.ja.md) を参照。
+[examples/mcp/guide.ja.md](../../examples/mcp/guide.ja.md) を参照。
 
 ## 5. 検索モードの使い分け
 
@@ -298,6 +320,11 @@ Namespace のデフォルトを使う場合は省略可。
 
 `filters` の左辺はドキュメント登録時の `metadata` キーと一致させる。
 
+> **1.0.0 では `filters` は適用されない。** 値は受け取られて検索処理に渡るが、
+> 全文検索側もベクトル検索側も参照しないため、絞り込まれていない結果が返る。
+> 配線されるまでは、呼び出し側で絞り込む。
+> [既知の制限](../../README.md#-known-limitations)を参照。
+
 ## 7. インデックスの管理
 
 | やりたいこと | API / 操作 |
@@ -306,7 +333,7 @@ Namespace のデフォルトを使う場合は省略可。
 | 削除 | `DELETE /api/v1/index/documents/{id}?namespaceId=...` |
 | 全再構築 | `POST /api/v1/index/rebuild` |
 | 状態確認 | `GET /api/v1/namespaces/{id}` の `indexMetadata` |
-| バックアップ / リストア | `POST /api/v1/admin/backup` / `/api/v1/admin/restore` |
+| バックアップ / リストア | `searchable backup` / `searchable restore`（CLI）、または `BackupService` / `RestoreService`（Java API） |
 
 大量データの初回投入はバッチ登録 (`/index/batch`) を推奨。
 
@@ -376,9 +403,9 @@ REST API のエラーは共通フォーマット:
 
 ## 12. もっと詳しく
 
-- 全 API の網羅: [examples/api/api-specification.ja.md](../examples/api/api-specification.ja.md)
-- 機械可読定義: [examples/api/openapi.yaml](../examples/api/openapi.yaml)
-- 内部構造: [architecture.md](architecture.md)
+- 全 API の網羅: [examples/api/api-specification.ja.md](../../examples/api/api-specification.ja.md)
+- 機械可読定義: [examples/api/openapi.yaml](../../examples/api/openapi.yaml)
+- 内部構造: [アーキテクチャ設計](../devel/design/architecture/overview.md)
 - ベクトル検索の詳細: [vector-search-guide.md](vector-search-guide.md)
 - チャンク分割の挙動: [chunking-guide.md](chunking-guide.md)
 - ユーザー辞書の管理: [user-dictionary-guide.md](user-dictionary-guide.md)
