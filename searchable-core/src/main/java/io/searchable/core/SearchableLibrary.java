@@ -23,6 +23,8 @@ import io.searchable.core.infrastructure.lucene.AnalyzerFactory;
 import io.searchable.core.infrastructure.lucene.IndexLayout;
 import io.searchable.core.infrastructure.lucene.LuceneFullTextSearcher;
 import io.searchable.core.infrastructure.lucene.LuceneIndexProvider;
+import io.searchable.core.infrastructure.chunking.WholeDocumentChunkingStrategy;
+import io.searchable.core.infrastructure.lucene.LuceneDocumentMapper;
 import io.searchable.core.infrastructure.lucene.LuceneIndexer;
 import io.searchable.core.infrastructure.lucene.UserDictionaryAnalyzerFactory;
 import io.searchable.core.infrastructure.lucene.LuceneVectorSearcher;
@@ -234,6 +236,8 @@ public final class SearchableLibrary implements AutoCloseable {
         private DocumentMetadataRepository documentMetadataRepository;
         private SearchableGlobalConfigProvider globalConfigProvider;
         private EmbeddingProvider embeddingProvider;
+        private final java.util.Map<String, EmbeddingProvider> namespaceEmbeddingProviders =
+            new java.util.LinkedHashMap<>();
         private AnalyzerFactory analyzerFactory;
         private LuceneIndexProvider indexProvider;
         private LuceneIndexer indexer;
@@ -307,6 +311,25 @@ public final class SearchableLibrary implements AutoCloseable {
             return this;
         }
 
+        /**
+         * Assign an embedding provider to one namespace, overriding the
+         * default set by {@link #embeddingProvider(EmbeddingProvider)}.
+         *
+         * <p>Namespaces without an assignment keep using the default. A
+         * provider registered here is closed together with the library.
+         *
+         * @param namespaceId the namespace the provider applies to
+         * @param provider    the provider to use for that namespace
+         * @return this builder
+         */
+        public Builder namespaceEmbeddingProvider(final String namespaceId,
+                                                  final EmbeddingProvider provider) {
+            Objects.requireNonNull(namespaceId, "namespaceId must not be null");
+            Objects.requireNonNull(provider, "provider must not be null");
+            this.namespaceEmbeddingProviders.put(namespaceId, provider);
+            return this;
+        }
+
         public Builder embeddingProvider(final EmbeddingProvider provider) {
             this.embeddingProvider = provider;
             return this;
@@ -361,10 +384,13 @@ public final class SearchableLibrary implements AutoCloseable {
             // Lucene + analyzer.
             if (analyzerFactory == null) {
                 final var analyzerType = applicationConfig.global().analyzer();
-                analyzerFactory = analyzerType == io.searchable.core.infrastructure.lucene.AnalyzerType.KUROMOJI
-                    ? new UserDictionaryAnalyzerFactory(
-                        new UserDictionaryResolver(dictionaryRepository))
-                    : AnalyzerFactory.forType(analyzerType);
+                final AnalyzerFactory globalDefault =
+                    analyzerType == io.searchable.core.infrastructure.lucene.AnalyzerType.KUROMOJI
+                        ? new UserDictionaryAnalyzerFactory(
+                            new UserDictionaryResolver(dictionaryRepository))
+                        : AnalyzerFactory.forType(analyzerType);
+                analyzerFactory = new io.searchable.core.infrastructure.lucene
+                    .NamespaceAwareAnalyzerFactory(namespaceRepository, globalDefault);
             }
             if (indexProvider == null) {
                 indexProvider = new LuceneIndexProvider(
@@ -381,13 +407,33 @@ public final class SearchableLibrary implements AutoCloseable {
                 registerCloseable(embeddingProvider);
             }
 
+            final io.searchable.core.spi.FilterPluginRegistry filterPlugins =
+                io.searchable.core.spi.FilterPluginRegistry.discover();
+            final EmbeddingProvider defaultEmbedding = embeddingProvider;
+            final java.util.Map<String, EmbeddingProvider> perNamespaceEmbedding =
+                java.util.Map.copyOf(namespaceEmbeddingProviders);
+            perNamespaceEmbedding.values().forEach(this::registerCloseable);
+            final java.util.function.Function<String, EmbeddingProvider> embeddingResolver =
+                ns -> perNamespaceEmbedding.getOrDefault(ns, defaultEmbedding);
+
             if (indexer == null && !readOnly) {
-                indexer = new LuceneIndexer(indexProvider, embeddingProvider);
+                final NamespaceRepository namespaces = namespaceRepository;
+                indexer = new LuceneIndexer(indexProvider,
+                    new LuceneDocumentMapper(),
+                    embeddingResolver,
+                    new WholeDocumentChunkingStrategy(),
+                    ns -> namespaces.findById(ns)
+                        .map(n -> n.config().indexedMetadataKeys())
+                        .orElseGet(java.util.Set::of),
+                    ns -> filterPlugins.fieldPlugins(namespaces.findById(ns)
+                        .map(n -> n.config().filterPlugins())
+                        .orElseGet(java.util.Set::of)));
             }
 
             // Search side.
             final LuceneFullTextSearcher fullText = new LuceneFullTextSearcher(indexProvider);
-            final LuceneVectorSearcher vector = new LuceneVectorSearcher(indexProvider, embeddingProvider);
+            final LuceneVectorSearcher vector = new LuceneVectorSearcher(
+                indexProvider, new LuceneDocumentMapper(), embeddingResolver);
 
             if (hybridOrchestrator == null) {
                 hybridOrchestrator = new HybridSearchOrchestrator(fullText, vector);
@@ -396,7 +442,8 @@ public final class SearchableLibrary implements AutoCloseable {
             if (searchService == null) {
                 searchService = new SearchService(namespaceRepository, fullText, vector,
                     hybridOrchestrator,
-                    new SearchResultEnricher(documentMetadataRepository));
+                    new SearchResultEnricher(documentMetadataRepository))
+                    .withPlugins(filterPlugins);
             }
             if (indexService == null && !readOnly) {
                 indexService = new IndexService(

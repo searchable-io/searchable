@@ -10,6 +10,8 @@ import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.queryparser.classic.MultiFieldQueryParser;
 import org.apache.lucene.queryparser.classic.QueryParser;
 import org.apache.lucene.search.IndexSearcher;
+import org.apache.lucene.search.BooleanClause;
+import org.apache.lucene.search.BooleanQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.TopDocs;
@@ -51,6 +53,18 @@ public final class LuceneFullTextSearcher {
     }
 
     public SearchResult search(final String namespaceId, final SearchRequest request) {
+        return search(namespaceId, request, null);
+    }
+
+    /**
+     * Run a full-text search, optionally narrowing candidates with a filter query.
+     *
+     * <p>The filter is attached as a FILTER clause, so it narrows the candidate
+     * set without contributing to the score. Highlighting still uses the
+     * unfiltered query, so filter terms are never highlighted.
+     */
+    public SearchResult search(final String namespaceId, final SearchRequest request,
+                               final Query filter) {
         Objects.requireNonNull(namespaceId, "namespaceId must not be null");
         Objects.requireNonNull(request, "request must not be null");
         final long start = System.nanoTime();
@@ -63,7 +77,7 @@ public final class LuceneFullTextSearcher {
             final Analyzer analyzer = ctx.analyzer();
             final Query query = parseQuery(analyzer, request);
             final int topN = request.pagination().offset() + request.pagination().limit();
-            final TopDocs hits = searcher.search(query, Math.max(topN, 1));
+            final TopDocs hits = searcher.search(withFilter(query, filter), Math.max(topN, 1));
 
             final List<SearchHit> result = collectHits(searcher, hits, analyzer, query,
                 request, namespaceId);
@@ -89,6 +103,16 @@ public final class LuceneFullTextSearcher {
      * configured with the request-level overrides. When neither parameter
      * is set, the searcher is left with Lucene's defaults (k1=1.2, b=0.75).
      */
+    private static Query withFilter(final Query query, final Query filter) {
+        if (filter == null) {
+            return query;
+        }
+        return new BooleanQuery.Builder()
+            .add(query, BooleanClause.Occur.MUST)
+            .add(filter, BooleanClause.Occur.FILTER)
+            .build();
+    }
+
     private void applyBm25Override(final IndexSearcher searcher, final SearchRequest request) {
         final Double k1 = request.options().bm25K1();
         final Double b = request.options().bm25B();

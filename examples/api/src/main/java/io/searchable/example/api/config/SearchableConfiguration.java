@@ -28,6 +28,7 @@ import io.searchable.core.infrastructure.embedding.HashEmbeddingProvider;
 import io.searchable.core.infrastructure.lucene.AnalyzerFactory;
 import io.searchable.core.infrastructure.lucene.UserDictionaryAnalyzerFactory;
 import io.searchable.core.infrastructure.lucene.IndexLayout;
+import io.searchable.core.infrastructure.lucene.RetentionPolicy;
 import io.searchable.core.infrastructure.lucene.LuceneDocumentMapper;
 import io.searchable.core.infrastructure.lucene.LuceneFullTextSearcher;
 import io.searchable.core.infrastructure.lucene.LuceneIndexProvider;
@@ -118,9 +119,11 @@ public class SearchableConfiguration {
     @Bean(destroyMethod = "close")
     public LuceneIndexProvider luceneIndexProvider(final SearchableProperties props,
                                                    final AnalyzerFactory analyzerFactory) {
+        final SearchableProperties.Retention retention = props.getIndex().getRetention();
         return new LuceneIndexProvider(
             new IndexLayout(props.getIndex().getDirectory()),
-            analyzerFactory);
+            analyzerFactory,
+            RetentionPolicy.of(retention.getGenerations(), retention.getMaxAge()));
     }
 
     @Bean(destroyMethod = "close")

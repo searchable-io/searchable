@@ -397,10 +397,17 @@ class IndexMetadata {
 **専用の metadata DB**(`DocumentMetadataRepository`)に保存する。
 Lucene のチャンク stored field には保存しない。
 
+ただし Namespace 設定の `indexedMetadataKeys` で宣言したキーだけは、絞り込みに使うため
+Lucene にも検索専用フィールドとして書く(`StringField`、`Store.NO`、解析なし)。
+フィールド名は `meta.` にキー名を続けた形になる。
+値を読み出す先は引き続き metadata DB であり、Lucene 側は条件の突き合わせにのみ使う。
+宣言していないキーは従来どおり Lucene へ書かない。
+
 | 種別 | 保存先 | 主キー |
 | --- | --- | --- |
 | 文書レベル属性(タイトル / `metadata` / indexedAt / 出自情報) | メタデータ DB(`DocumentMetadataRepository`、`DOCUMENT_METADATA` テーブル) | `(namespace_id, document_id)` |
 | チャンク固有メタデータ(heading / level / weight 等) | Lucene stored field (`CHUNK_METADATA_JSON`) | `(namespace_id, parent_id, chunk_ordinal)` |
+| 宣言した絞り込み用メタデータキー | Lucene 検索専用フィールド(`meta.*`、`Store.NO`) | `(namespace_id, parent_id, chunk_ordinal)` |
 
 出自情報(取得元の種別 / 場所 / コンテンツハッシュ / 元データの更新時刻)は
 変更検知用に `DocumentMetadataRecord.source` として同じ行に統合され、

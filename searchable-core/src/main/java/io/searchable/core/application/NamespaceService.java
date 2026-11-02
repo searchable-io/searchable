@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Application-layer service for namespace lifecycle and configuration.
@@ -145,7 +146,10 @@ public final class NamespaceService {
             p.embeddingConfig(),
             p.aiConfig() != null ? p.aiConfig() : AiConfig.disabled(),
             p.indexWeight() != null ? p.indexWeight() : NamespaceConfig.DEFAULT_INDEX_WEIGHT,
-            p.customParams()
+            p.customParams(),
+            p.indexedMetadataKeys() != null ? p.indexedMetadataKeys() : Set.of(),
+            p.filterPlugins() != null ? p.filterPlugins() : Set.of(),
+            p.analyzerType()
         );
     }
 }

@@ -27,6 +27,9 @@ import java.util.Map;
  *                         {@code "title"} or {@code "content"}. Values
  *                         must be positive. {@code null} or empty means
  *                         "use the default single-field query".
+ * @param aggregation      how chunk-level hits are folded into document-level
+ *                         hits. Defaults to {@link ChunkAggregation#NONE},
+ *                         which keeps the behaviour of earlier releases.
  */
 public record SearchOptions(
     boolean highlightEnabled,
@@ -35,7 +38,8 @@ public record SearchOptions(
     boolean lazyLoad,
     Double bm25K1,
     Double bm25B,
-    Map<String, Double> metaWeights
+    Map<String, Double> metaWeights,
+    ChunkAggregation aggregation
 ) {
 
     public static final int DEFAULT_SNIPPET_LENGTH = 200;
@@ -64,6 +68,21 @@ public record SearchOptions(
             }
             metaWeights = Collections.unmodifiableMap(new LinkedHashMap<>(metaWeights));
         }
+        if (aggregation == null) {
+            aggregation = ChunkAggregation.NONE;
+        }
+    }
+
+    /** Backward-compatible constructor that omits the aggregation policy. */
+    public SearchOptions(final boolean highlightEnabled,
+                         final int snippetLength,
+                         final boolean escapeMarkup,
+                         final boolean lazyLoad,
+                         final Double bm25K1,
+                         final Double bm25B,
+                         final Map<String, Double> metaWeights) {
+        this(highlightEnabled, snippetLength, escapeMarkup, lazyLoad, bm25K1, bm25B,
+            metaWeights, ChunkAggregation.NONE);
     }
 
     /** Backward-compatible constructor matching the original single-arg form. */
@@ -94,6 +113,7 @@ public record SearchOptions(
     }
 
     public static SearchOptions defaults() {
-        return new SearchOptions(true, DEFAULT_SNIPPET_LENGTH, true, false, null, null, Map.of());
+        return new SearchOptions(true, DEFAULT_SNIPPET_LENGTH, true, false, null, null,
+            Map.of(), ChunkAggregation.NONE);
     }
 }

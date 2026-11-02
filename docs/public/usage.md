@@ -328,12 +328,47 @@ Search options control result formatting.
 }
 ```
 
-The left-hand side of `filters` must match the `metadata` key supplied at document registration.
+The left-hand side of `filters` must be a metadata key the namespace declares as
+indexable. Declare the keys you want to filter on when creating the namespace:
 
-> **`filters` has no effect in 1.0.0.** The field is accepted and passed through the search
-> pipeline, but neither the full-text nor the vector searcher reads it, so the response is
-> unfiltered. Narrow the results in your own code until this is wired up. See
-> [Known limitations](../../README.md#-known-limitations).
+```json
+{
+  "indexedMetadataKeys": ["source", "visibility", "dept"]
+}
+```
+
+Only declared keys are written to the index, and only declared keys may appear in a
+filter. A filter that cannot be applied fails the request — whether the key is not
+declared or the namespace declares none at all — rather than quietly returning results
+that were never narrowed. Searches that pass no filter are unaffected.
+
+Values are matched exactly and are never analyzed, so `Sales` does not match `sales`,
+and a full-width and a half-width form are different values. Normalize values the same
+way when indexing and when querying, or register a metadata field plugin that owns the
+key (see [Adding plugins](#8-adding-plugins)).
+
+`filters` combines keys with AND, and a list value under one key with OR. When you need
+OR across different keys — the usual shape of an access rule — send `filter` instead:
+
+```json
+{
+  "filter": {
+    "or": [
+      {"term": {"key": "visibility", "values": ["COMPANY"]}},
+      {"and": [
+        {"term": {"key": "visibility", "values": ["DEPARTMENT"]}},
+        {"term": {"key": "dept", "values": ["sales"]}}
+      ]}
+    ]
+  }
+}
+```
+
+Both forms are applied while the index is read, not after the results come back, so a
+narrowed search still fills the page you asked for.
+
+Metadata that only changes value — a permission edit, say — can be re-indexed without
+re-sending the body, through `IndexService.reindexMetadata`.
 
 ## 7. Managing the index
 
@@ -344,6 +379,24 @@ The left-hand side of `filters` must match the `metadata` key supplied at docume
 | Full rebuild | `POST /api/v1/index/rebuild` |
 | Status check | `indexMetadata` of `GET /api/v1/namespaces/{id}` |
 | Backup / restore | `searchable backup` / `searchable restore` (CLI), or `BackupService` / `RestoreService` (Java API) |
+
+### Keeping older index generations
+
+A rebuild writes a new index generation and switches searches over to it once it is
+complete. Only the active generation is kept by default. To keep more, so you can fall
+back to a previous build:
+
+```yaml
+searchable:
+  index:
+    retention:
+      generations: 3   # the newest 3 generations
+      max-age: 24h     # and anything built within the last 24 hours
+```
+
+The two rules form a union, and the active generation is kept whatever they say. Old
+generations are deleted after a grace period, so searches already in flight are not
+disturbed. Keeping more generations costs disk space proportional to the index size.
 
 For initial loading of large data sets, batch registration (`/index/batch`) is recommended.
 
@@ -379,6 +432,25 @@ Main configuration keys. For the complete list, see [setup-guide.md](setup-guide
 | `searchable.global.default-architecture` | `FULL_TEXT` | Default search method |
 | `searchable.global.default-search-strategy` | `SEQUENTIAL` | Execution strategy for hybrid |
 | `searchable.plugins.directory` | (unset) | Directory of plugin JARs |
+
+### Choosing the analyzer per namespace
+
+Each namespace indexes and queries with one analyzer.
+
+| Value | Use for |
+| --- | --- |
+| `KUROMOJI` | Japanese text (the global default) |
+| `ENGLISH` | English text; applies English stemming and stop words |
+| `STANDARD` | Mixed or language-neutral text, with no stemming |
+| `SUDACHI` | Japanese text, when Sudachi is on the classpath |
+
+Leave `analyzerType` unset and the first ingest detects the language from the text,
+writes the decision back to the namespace, and keeps it from then on. Detection uses
+Lingua when it is on the classpath and a character-ratio heuristic otherwise.
+
+The analyzer decides how text is split into terms, and the same rules have to apply when
+indexing and when querying. Changing a namespace's analyzer therefore means rebuilding
+its index.
 
 ## 10. Error handling
 

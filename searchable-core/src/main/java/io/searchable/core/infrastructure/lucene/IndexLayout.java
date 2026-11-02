@@ -182,16 +182,60 @@ public final class IndexLayout {
      * sorted by timestamp ascending. The newest version is excluded so
      * callers do not accidentally GC the live searcher's directory.
      */
+    @Deprecated(since = "1.0.1", forRemoval = false)
     public List<Path> obsoleteVersions(final String namespaceId, final Path keepVersion) {
+        return versionsToReclaim(namespaceId, RetentionPolicy.keepActiveOnly(), keepVersion,
+            Clock.systemUTC());
+    }
+
+    /**
+     * Versions that may be deleted under the given retention policy, sorted by
+     * timestamp ascending.
+     *
+     * <p>A version survives when it is the active one, when it is among the
+     * newest {@code generations}, or when it was created within
+     * {@code maxAge}. The three rules form a union, so widening either setting
+     * only ever keeps more. Versions newer than the active one are never
+     * reclaimed either, so a build started by another process is left alone.
+     *
+     * <p>A version's creation time is read from its directory name, which is
+     * the millisecond timestamp assigned when the build started. No file
+     * system metadata is consulted.
+     *
+     * @param namespaceId the namespace to inspect
+     * @param policy      the retention policy
+     * @param keepVersion the active version, which is always kept
+     * @param clock       clock used to evaluate the age rule
+     * @return the versions that can be deleted
+     */
+    public List<Path> versionsToReclaim(final String namespaceId,
+                                        final RetentionPolicy policy,
+                                        final Path keepVersion,
+                                        final Clock clock) {
+        Objects.requireNonNull(policy, "policy must not be null");
         Objects.requireNonNull(keepVersion, "keepVersion must not be null");
+        Objects.requireNonNull(clock, "clock must not be null");
         final long keepTs = versionOf(keepVersion);
-        final List<Path> obsolete = new ArrayList<>();
-        for (final Path v : readableVersions(namespaceId)) {
-            if (versionOf(v) < keepTs) {
-                obsolete.add(v);
+        final List<Path> versions = readableVersions(namespaceId);
+        final int total = versions.size();
+        final int newestFrom = total - policy.generations();
+        final long ageCutoff = policy.hasAgeRule()
+            ? clock.millis() - policy.maxAge().toMillis()
+            : Long.MIN_VALUE;
+
+        final List<Path> reclaimable = new ArrayList<>();
+        for (int i = 0; i < total; i++) {
+            final Path version = versions.get(i);
+            final long timestamp = versionOf(version);
+            if (timestamp >= keepTs || i >= newestFrom) {
+                continue;
             }
+            if (policy.hasAgeRule() && timestamp >= ageCutoff) {
+                continue;
+            }
+            reclaimable.add(version);
         }
-        return Collections.unmodifiableList(obsolete);
+        return Collections.unmodifiableList(reclaimable);
     }
 
     /**

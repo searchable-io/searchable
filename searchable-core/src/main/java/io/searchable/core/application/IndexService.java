@@ -2,6 +2,10 @@ package io.searchable.core.application;
 
 import io.searchable.core.domain.document.ContentHashes;
 import io.searchable.core.domain.document.Document;
+import io.searchable.core.domain.namespace.Namespace;
+import io.searchable.core.infrastructure.lucene.LanguageDetector;
+import io.searchable.core.infrastructure.lucene.AnalyzerType;
+import io.searchable.core.domain.embedding.EmbeddingProvider;
 import io.searchable.core.domain.document.DocumentMetadataRecord;
 import io.searchable.core.domain.document.DocumentMetadataRepository;
 import io.searchable.core.domain.document.DocumentSource;
@@ -31,6 +35,16 @@ import java.util.Optional;
  * {@link IndexMetadata} row in sync after each mutation.
  */
 public final class IndexService {
+
+    /** Index statistics key holding the embedding model identifier. */
+    public static final String EMBEDDING_MODEL_KEY = "embeddingModel";
+    /** Index statistics key holding the embedding vector dimension. */
+    public static final String EMBEDDING_DIMENSION_KEY = "embeddingDimension";
+
+    /** How much ingested text is sampled when detecting the analyzer. */
+    private static final int ANALYZER_SAMPLE_CHARS = 4000;
+
+    private final LanguageDetector languageDetector = LanguageDetector.defaultDetector();
 
     private static final Logger log = LoggerFactory.getLogger(IndexService.class);
 
@@ -66,6 +80,7 @@ public final class IndexService {
     public void index(final Document document) {
         Objects.requireNonNull(document, "document must not be null");
         requireNamespaceExists(document.namespaceId());
+        verifyEmbeddingModel(document.namespaceId());
         indexer.index(document);
         recordMetadata(document, effectiveHash(document));
         refreshMetadata(document.namespaceId(), IndexStatus.READY);
@@ -82,6 +97,7 @@ public final class IndexService {
     public boolean indexIfChanged(final Document document) {
         Objects.requireNonNull(document, "document must not be null");
         requireNamespaceExists(document.namespaceId());
+        verifyEmbeddingModel(document.namespaceId());
         if (documentMetadata == null) {
             // No repository configured -- behave like {@link #index(Document)}.
             index(document);
@@ -102,6 +118,141 @@ public final class IndexService {
         recordMetadata(document, newHash);
         refreshMetadata(document.namespaceId(), IndexStatus.READY);
         return true;
+    }
+
+    /**
+     * Replace the indexed metadata of an existing document without re-sending
+     * its body.
+     *
+     * <p>Lucene cannot update a single field, so changing a value that is
+     * declared as indexable normally means ingesting the whole document again.
+     * This entry point reuses the chunk texts already held in the index and the
+     * title held in the metadata DB, so the caller only supplies the new
+     * metadata.
+     *
+     * @param namespaceId the namespace holding the document
+     * @param documentId  the document to update
+     * @param metadata    the metadata that replaces the stored one
+     * @return {@code true} when the document existed and was rewritten
+     * @throws IllegalStateException when no metadata repository is configured
+     */
+    public boolean reindexMetadata(final String namespaceId, final String documentId,
+                                   final Map<String, Object> metadata) {
+        Objects.requireNonNull(namespaceId, "namespaceId must not be null");
+        Objects.requireNonNull(documentId, "documentId must not be null");
+        requireNamespaceExists(namespaceId);
+        if (documentMetadata == null) {
+            throw new IllegalStateException(
+                "Metadata-only reindex requires a document metadata repository");
+        }
+        final DocumentMetadataRecord record = documentMetadata.findById(namespaceId, documentId)
+            .orElseThrow(() -> new NoSuchElementException(
+                "Document not found: " + documentId + " in namespace " + namespaceId));
+        final Document document = Document.builder()
+            .id(documentId)
+            .namespaceId(namespaceId)
+            .title(record.title())
+            .content("")
+            .metadata(metadata)
+            .indexedAt(record.indexedAt())
+            .source(record.source())
+            .build();
+        if (!indexer.reindexMetadata(document)) {
+            return false;
+        }
+        documentMetadata.save(new DocumentMetadataRecord(
+            namespaceId, documentId, record.title(), metadata,
+            record.indexedAt(), record.source()));
+        refreshMetadata(namespaceId, IndexStatus.READY);
+        return true;
+    }
+
+    /**
+     * Record which embedding model produced the vectors in this namespace.
+     *
+     * <p>Stored alongside the index statistics so a later ingest can tell
+     * whether it is about to mix vectors from a different model.
+     */
+    private Map<String, Object> embeddingStatistics(final String namespaceId) {
+        final EmbeddingProvider embedding = indexer.embeddingFor(namespaceId);
+        if (embedding == null) {
+            return Map.of();
+        }
+        return Map.of(
+            EMBEDDING_MODEL_KEY, embedding.identifier(),
+            EMBEDDING_DIMENSION_KEY, embedding.dimension());
+    }
+
+    /**
+     * Refuse to write when the namespace already holds vectors from another
+     * model.
+     *
+     * <p>Writing vectors of a different dimension into the same field breaks
+     * the index, and a same-dimension model change silently degrades every
+     * later search, so both are stopped before any document is touched. A
+     * namespace that is still empty, or that was built before this was
+     * recorded, is left alone.
+     */
+    private void verifyEmbeddingModel(final String namespaceId) {
+        final EmbeddingProvider embedding = indexer.embeddingFor(namespaceId);
+        if (embedding == null) {
+            return;
+        }
+        final Optional<IndexMetadata> recorded = indexMetadata.findByNamespaceId(namespaceId);
+        if (recorded.isEmpty() || recorded.get().documentCount() == 0L) {
+            return;
+        }
+        final Map<String, Object> statistics = recorded.get().statistics();
+        final Object model = statistics.get(EMBEDDING_MODEL_KEY);
+        final Object dimension = statistics.get(EMBEDDING_DIMENSION_KEY);
+        if (model == null || !(dimension instanceof Number recordedDimension)) {
+            return;
+        }
+        if (!model.equals(embedding.identifier())
+            || recordedDimension.intValue() != embedding.dimension()) {
+            throw new IllegalStateException(
+                "Namespace " + namespaceId + " was indexed with embedding model '" + model
+                    + "' (dimension " + recordedDimension.intValue() + ") but the configured provider is '"
+                    + embedding.identifier() + "' (dimension " + embedding.dimension()
+                    + "); rebuild the namespace before switching models");
+        }
+    }
+
+    /**
+     * Decide the namespace's analyzer from the text being ingested, once.
+     *
+     * <p>Only namespaces that have not been given an analyzer are touched, and
+     * the decision is written back before the index is built. Terms are split
+     * by the analyzer at index time and queries are split by it at search
+     * time, so re-deciding later would break every existing term; fixing it on
+     * first ingest is what keeps the two sides in step.
+     */
+    private void ensureAnalyzerDecided(final String namespaceId, final List<Document> documents) {
+        final Namespace namespace = namespaces.findById(namespaceId).orElse(null);
+        if (namespace == null || namespace.config().analyzerType() != null || documents.isEmpty()) {
+            return;
+        }
+        final Optional<AnalyzerType> detected = languageDetector.detect(sampleText(documents));
+        if (detected.isEmpty()) {
+            return;
+        }
+        namespaces.save(namespace.withConfig(
+            namespace.config().withAnalyzerType(detected.get()), clock.instant()));
+        log.info("namespace {} will use the {} analyzer, detected from the ingested text",
+            namespaceId, detected.get());
+    }
+
+    private static String sampleText(final List<Document> documents) {
+        final StringBuilder sample = new StringBuilder();
+        for (final Document document : documents) {
+            if (sample.length() >= ANALYZER_SAMPLE_CHARS) {
+                break;
+            }
+            sample.append(document.title()).append(' ').append(document.content()).append('\n');
+        }
+        return sample.length() > ANALYZER_SAMPLE_CHARS
+            ? sample.substring(0, ANALYZER_SAMPLE_CHARS)
+            : sample.toString();
     }
 
     private String effectiveHash(final Document document) {
@@ -136,6 +287,8 @@ public final class IndexService {
         Objects.requireNonNull(namespaceId, "namespaceId must not be null");
         Objects.requireNonNull(documents, "documents must not be null");
         requireNamespaceExists(namespaceId);
+        verifyEmbeddingModel(namespaceId);
+        ensureAnalyzerDecided(namespaceId, documents);
 
         markStatus(namespaceId, IndexStatus.INDEXING);
         try {
@@ -268,7 +421,7 @@ public final class IndexService {
                 ctx.indexSizeBytes(),
                 clock.instant(),
                 status,
-                Map.of()
+                embeddingStatistics(namespaceId)
             ));
         } catch (IOException e) {
             throw new IllegalStateException(

@@ -2,9 +2,9 @@
 
 | 項目 | 内容 |
 | --- | --- |
-| ステータス | → M5 TASK-021 に昇格 |
+| ステータス | → M4 TASK-020 に昇格 |
 | 起票元 | M3（`docs/devel/work/tasks/closed/tasks.m3.md`） |
-| 想定マイルストーン | M5（[`tasks.m5.md`](../tasks/tasks.m5.md)） |
+| 想定マイルストーン | M4（[`task.md`](../tasks/task.md)） |
 | 依存関係 | - |
 
 ## 概要
@@ -23,9 +23,9 @@
 2026-11-02、検索の絞り込み改善の検討
 （[`search-filtering-requirements.md`](../plans/search-filtering-requirements.md)）で
 拡張点の要否を取り上げ、要件 R10 として取り込むことを決めた。
-M5 の TASK-021（介入点の決定）と TASK-022（実装）へ転記済み。
+TASK-020（SPI 設計の決定）、TASK-021・TASK-022（実装）へ転記済み。
 
-上記の想定 API 2 案のうちどちらを採るかは TASK-021 で決める。判断材料として、
+上記の想定 API 2 案は両方とも設けることを決めた。判断材料として、
 ベクトル検索のフィルターは近傍探索を始める前にセグメント全体で評価されるため、
 `accept(SearchHit)` 側の介入点は近傍探索へ渡せない（Lucene 10.4.0 で確認）。
 

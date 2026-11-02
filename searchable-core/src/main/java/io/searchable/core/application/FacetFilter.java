@@ -7,7 +7,16 @@ import java.util.Map;
 
 /**
  * Post-search filter that retains only the hits matching every entry in the
- * supplied filter map (TASK-055).
+ * supplied filter map.
+ *
+ * <p><strong>This runs after the search.</strong> The engine has already
+ * returned at most {@code limit} hits by the time this filter is applied, so
+ * hits it discards are not replaced and the caller receives fewer results than
+ * requested. Query-stage filtering, which does not have this problem, is built
+ * by {@code FilterQueryBuilder} and applied inside the searchers.
+ *
+ * <p>This class is not called from the search path. It is kept as the basis
+ * for the post-search extension point described in requirement R10.
  *
  * <p>Semantics:
  * <ul>

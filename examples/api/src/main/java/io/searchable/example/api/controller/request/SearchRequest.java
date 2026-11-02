@@ -1,5 +1,6 @@
 package io.searchable.example.api.controller.request;
 
+import io.searchable.example.api.controller.payload.FilterPayload;
 import io.searchable.example.api.controller.payload.SearchOptionsPayload;
 import io.searchable.core.domain.search.PaginationParams;
 import io.searchable.core.domain.search.SearchOptions;
@@ -15,7 +16,8 @@ public record SearchRequest(
     List<String> namespaceIds,
     SearchType searchType,
     SearchOptionsPayload options,
-    Map<String, Object> filters
+    Map<String, Object> filters,
+    FilterPayload filter
 ) {
 
     public io.searchable.core.domain.search.SearchRequest toDomain() {
@@ -30,6 +32,7 @@ public record SearchRequest(
             .options(new SearchOptions(highlight))
             .pagination(new PaginationParams(offset, limit))
             .filters(filters == null ? Map.of() : filters)
+            .filterExpression(filter == null ? null : filter.toDomain())
             .build();
     }
 }

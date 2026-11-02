@@ -70,10 +70,10 @@ changes deferred to 2.0. Depend on `1.0.0`; the `main` branch carries
 `./mvnw -B clean install`.
 
 Two capabilities are **not** available in 1.0.0 and are worth checking
-before you adopt the library:
+before you adopt the library. Both are implemented on `main` and ship in
+the next release — see [Known limitations](#-known-limitations).
 
-- `SearchRequest.filters` is accepted by the API but **not applied** —
-  see [Known limitations](#-known-limitations).
+- `SearchRequest.filters` is accepted by the API but **not applied**.
 - Document-level `metadata` is stored in the metadata DB, not in the
   Lucene index, so it cannot be used to narrow a query.
 
@@ -344,6 +344,13 @@ discovery styles are used:
 
 Behaviour in 1.0.0 that the rest of this README would otherwise imply
 is available. Each item links to the code that defines it.
+
+**Every limitation below is resolved on `main`** and ships in the next
+release; they describe 1.0.0 only. On `main`, metadata keys declared in
+a namespace's `indexedMetadataKeys` are indexed and applied at query
+stage, chunk hits can be folded per document, and each namespace can be
+given its own embedding provider. See
+[usage](docs/public/usage.md#6-highlighting-and-filtering).
 
 | Limitation | Detail |
 | --- | --- |

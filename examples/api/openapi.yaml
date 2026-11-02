@@ -486,11 +486,66 @@ components:
           type: object
           additionalProperties: true
           description: |
-            Reserved. The field is accepted and carried into the search
-            request, but release 1.0.0 does not apply it: neither the
-            full-text nor the vector searcher reads these values, so the
-            response is not narrowed. Filter in the client until this is
-            implemented.
+            Map form of the filter. Keys are combined with AND and a list
+            value under one key is combined with OR. Applied at query stage,
+            so a narrowed search still fills the requested page.
+
+            Only keys declared in the namespace's `indexedMetadataKeys` can
+            be used. A namespace that declares none ignores this field and
+            logs a warning; once a key is declared, naming an undeclared key
+            fails the request.
+
+            Use `filter` instead when OR across different keys is needed.
+        filter:
+          allOf:
+            - $ref: '#/components/schemas/FilterExpression'
+          description: |
+            Expression form of the filter. Takes precedence over `filters`
+            when both are present.
+    FilterExpression:
+      type: object
+      description: |
+        One node of a filter expression. Exactly one of `term`, `and` or
+        `or` must be set.
+
+        Example, an access rule combining both operators:
+
+        ```json
+        {"or": [
+          {"term": {"key": "visibility", "values": ["COMPANY"]}},
+          {"and": [
+            {"term": {"key": "visibility", "values": ["DEPARTMENT"]}},
+            {"term": {"key": "dept", "values": ["X"]}}
+          ]},
+          {"term": {"key": "allowed_user", "values": ["U"]}}
+        ]}
+        ```
+
+        Values are matched exactly, without analysis, so case and width
+        differences do not match.
+      properties:
+        term:
+          type: object
+          required: [key, values]
+          properties:
+            key:
+              type: string
+              description: A metadata key declared in `indexedMetadataKeys`.
+            values:
+              type: array
+              minItems: 1
+              items: { type: string }
+              description: The hit matches when the key equals any of these.
+        and:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/FilterExpression'
+        or:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/FilterExpression'
     SearchHit:
       type: object
       properties:

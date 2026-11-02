@@ -23,6 +23,8 @@ public final class LuceneFields {
     public static final String INDEXED_AT_EPOCH = "indexedAtEpoch";
     /** KNN vector field name. */
     public static final String VECTOR = "vector";
+    /** Prefix applied to document metadata keys declared as indexable. */
+    public static final String METADATA_FIELD_PREFIX = "meta.";
 
     static {
         final FieldType type = new FieldType();
@@ -34,6 +36,16 @@ public final class LuceneFields {
         type.setStoreTermVectorOffsets(true);
         type.freeze();
         ANALYZED_STORED_WITH_VECTORS = type;
+    }
+
+    /**
+     * Lucene field name used for a declared document metadata key.
+     *
+     * @param key the metadata key as declared on the namespace
+     * @return the field name
+     */
+    public static String metadataField(final String key) {
+        return METADATA_FIELD_PREFIX + key;
     }
 
     private LuceneFields() { }

@@ -3,7 +3,10 @@ package io.searchable.core.application;
 import io.searchable.core.domain.search.PaginationParams;
 import io.searchable.core.domain.search.SearchHit;
 import io.searchable.core.domain.search.SearchOrder;
+import io.searchable.core.domain.search.ChunkAggregation;
+import io.searchable.core.domain.search.SearchOptions;
 import io.searchable.core.domain.search.SearchRequest;
+import org.apache.lucene.search.Query;
 import io.searchable.core.domain.search.SearchResult;
 import io.searchable.core.infrastructure.lucene.LuceneFullTextSearcher;
 import io.searchable.core.infrastructure.lucene.LuceneVectorSearcher;
@@ -56,6 +59,14 @@ public final class HybridSearchOrchestrator implements AutoCloseable {
     public SearchResult sequential(final String namespaceId,
                                    final SearchRequest request,
                                    final SearchOrder order) {
+        return sequential(namespaceId, request, order, null);
+    }
+
+    /** Sequential hybrid, narrowing candidates with the supplied filter query. */
+    public SearchResult sequential(final String namespaceId,
+                                   final SearchRequest request,
+                                   final SearchOrder order,
+                                   final Query filter) {
         Objects.requireNonNull(order, "order must not be null");
         final long start = System.nanoTime();
 
@@ -63,11 +74,11 @@ public final class HybridSearchOrchestrator implements AutoCloseable {
         final SearchResult primary;
         final SearchResult secondary;
         if (order == SearchOrder.FULL_TEXT_FIRST) {
-            primary = fullTextSearcher.search(namespaceId, expanded);
-            secondary = vectorSearcher.search(namespaceId, expanded);
+            primary = fullTextSearcher.search(namespaceId, expanded, filter);
+            secondary = vectorSearcher.search(namespaceId, expanded, filter);
         } else {
-            primary = vectorSearcher.search(namespaceId, expanded);
-            secondary = fullTextSearcher.search(namespaceId, expanded);
+            primary = vectorSearcher.search(namespaceId, expanded, filter);
+            secondary = fullTextSearcher.search(namespaceId, expanded, filter);
         }
 
         final List<SearchHit> merged = merger.intersect(primary.hits(), secondary.hits());
@@ -79,13 +90,19 @@ public final class HybridSearchOrchestrator implements AutoCloseable {
      * are merged via Reciprocal Rank Fusion.
      */
     public SearchResult parallel(final String namespaceId, final SearchRequest request) {
+        return parallel(namespaceId, request, null);
+    }
+
+    /** Parallel hybrid, narrowing candidates with the supplied filter query. */
+    public SearchResult parallel(final String namespaceId, final SearchRequest request,
+                                 final Query filter) {
         final long start = System.nanoTime();
         final SearchRequest expanded = expandedRequest(request);
 
         final CompletableFuture<SearchResult> ft = CompletableFuture.supplyAsync(
-            () -> fullTextSearcher.search(namespaceId, expanded), executor);
+            () -> fullTextSearcher.search(namespaceId, expanded, filter), executor);
         final CompletableFuture<SearchResult> vec = CompletableFuture.supplyAsync(
-            () -> vectorSearcher.search(namespaceId, expanded), executor);
+            () -> vectorSearcher.search(namespaceId, expanded, filter), executor);
 
         try {
             final SearchResult fullText = ft.join();
@@ -106,10 +123,33 @@ public final class HybridSearchOrchestrator implements AutoCloseable {
             .query(request.query())
             .namespaceIds(request.namespaceIds())
             .searchType(request.searchType())
-            .options(request.options())
+            .options(documentGranularity(request.options()))
             .pagination(new PaginationParams(0, target))
             .filters(request.filters())
+            .filterExpression(request.filterExpression())
             .build();
+    }
+
+    /**
+     * Raise the aggregation policy so both engines return document-level hits.
+     *
+     * <p>Fusion ranks documents, so the two input lists must have the same
+     * granularity. The full-text searcher always folds chunks into their
+     * parent document; the vector searcher only does so when asked. Leaving
+     * the policy at {@link ChunkAggregation#NONE} would therefore feed
+     * chunk-level hits from one side and document-level hits from the other,
+     * and the fused ranking would not be document-level at all.
+     *
+     * <p>This applies to the hybrid path only. A plain vector search keeps
+     * whatever the caller asked for.
+     */
+    private static SearchOptions documentGranularity(final SearchOptions options) {
+        if (options.aggregation() != ChunkAggregation.NONE) {
+            return options;
+        }
+        return new SearchOptions(options.highlightEnabled(), options.snippetLength(),
+            options.escapeMarkup(), options.lazyLoad(), options.bm25K1(), options.bm25B(),
+            options.metaWeights(), ChunkAggregation.BEST_CHUNK);
     }
 
     private SearchResult paginate(final List<SearchHit> merged,

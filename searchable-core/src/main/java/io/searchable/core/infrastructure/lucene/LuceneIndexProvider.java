@@ -66,6 +66,7 @@ public final class LuceneIndexProvider implements AutoCloseable {
     private final Clock clock;
     private final Duration retirementGrace;
     private final Duration staleTmpThreshold;
+    private final RetentionPolicy retentionPolicy;
     private final Map<String, LuceneIndexContext> contexts = new ConcurrentHashMap<>();
     private final Deque<ScheduledFuture<?>> retirements = new ArrayDeque<>();
     private final ScheduledExecutorService retirementExecutor;
@@ -78,6 +79,21 @@ public final class LuceneIndexProvider implements AutoCloseable {
                                final AnalyzerFactory analyzerFactory,
                                final boolean readOnly) {
         this(layout, analyzerFactory, readOnly, StorageBackend.FILESYSTEM);
+    }
+
+    /**
+     * Convenience form that keeps every default except the retention policy.
+     *
+     * @param layout          index directory layout
+     * @param analyzerFactory analyzer factory
+     * @param retentionPolicy how many old generations to keep
+     */
+    public LuceneIndexProvider(final IndexLayout layout,
+                               final AnalyzerFactory analyzerFactory,
+                               final RetentionPolicy retentionPolicy) {
+        this(layout, analyzerFactory, false, StorageBackend.FILESYSTEM,
+            Clock.systemUTC(), DEFAULT_RETIREMENT_GRACE, DEFAULT_STALE_TMP_THRESHOLD,
+            retentionPolicy);
     }
 
     public LuceneIndexProvider(final IndexLayout layout,
@@ -95,6 +111,33 @@ public final class LuceneIndexProvider implements AutoCloseable {
                                final Clock clock,
                                final Duration retirementGrace,
                                final Duration staleTmpThreshold) {
+        this(layout, analyzerFactory, readOnly, backend, clock, retirementGrace, staleTmpThreshold,
+            RetentionPolicy.keepActiveOnly());
+    }
+
+    /**
+     * Full form, taking the retention policy that decides how many old index
+     * generations survive a rebuild.
+     *
+     * @param layout            index directory layout
+     * @param analyzerFactory   analyzer factory
+     * @param readOnly          whether this provider may only read
+     * @param backend           storage backend
+     * @param clock             clock used for version timestamps and retention
+     * @param retirementGrace   delay before an obsolete version is deleted
+     * @param staleTmpThreshold age at which an abandoned build directory is cleaned
+     * @param retentionPolicy   how many old generations to keep
+     */
+    public LuceneIndexProvider(final IndexLayout layout,
+                               final AnalyzerFactory analyzerFactory,
+                               final boolean readOnly,
+                               final StorageBackend backend,
+                               final Clock clock,
+                               final Duration retirementGrace,
+                               final Duration staleTmpThreshold,
+                               final RetentionPolicy retentionPolicy) {
+        this.retentionPolicy = Objects.requireNonNull(retentionPolicy,
+            "retentionPolicy must not be null");
         this.layout = Objects.requireNonNull(layout, "layout must not be null");
         this.analyzerFactory = Objects.requireNonNull(analyzerFactory, "analyzerFactory must not be null");
         this.backend = Objects.requireNonNull(backend, "backend must not be null");
@@ -529,7 +572,8 @@ public final class LuceneIndexProvider implements AutoCloseable {
         }
         final ScheduledFuture<?> future = retirementExecutor.schedule(() -> {
             try {
-                for (final Path obsolete : layout.obsoleteVersions(namespaceId, keepVersion)) {
+                for (final Path obsolete
+                        : layout.versionsToReclaim(namespaceId, retentionPolicy, keepVersion, clock)) {
                     log.info("deleting obsolete index version {}", obsolete);
                     layout.deleteRecursively(obsolete);
                 }

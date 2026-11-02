@@ -73,8 +73,8 @@ class CoverageSweepFinal3Test {
     void hybridParallelWrapsCompletionException() {
         final LuceneFullTextSearcher fts = mock(LuceneFullTextSearcher.class);
         final LuceneVectorSearcher vec = mock(LuceneVectorSearcher.class);
-        when(fts.search(any(), any())).thenThrow(new RuntimeException("ft-boom"));
-        when(vec.search(any(), any()))
+        when(fts.search(any(), any(), any())).thenThrow(new RuntimeException("ft-boom"));
+        when(vec.search(any(), any(), any()))
             .thenReturn(io.searchable.core.domain.search.SearchResult.empty(0));
         try (HybridSearchOrchestrator orch = new HybridSearchOrchestrator(fts, vec)) {
             assertThatThrownBy(() -> orch.parallel("ns",
@@ -88,9 +88,9 @@ class CoverageSweepFinal3Test {
     void hybridParallelEmptyResultPaginatesGracefully() {
         final LuceneFullTextSearcher fts = mock(LuceneFullTextSearcher.class);
         final LuceneVectorSearcher vec = mock(LuceneVectorSearcher.class);
-        when(fts.search(any(), any()))
+        when(fts.search(any(), any(), any()))
             .thenReturn(io.searchable.core.domain.search.SearchResult.empty(0));
-        when(vec.search(any(), any()))
+        when(vec.search(any(), any(), any()))
             .thenReturn(io.searchable.core.domain.search.SearchResult.empty(0));
         try (HybridSearchOrchestrator orch = new HybridSearchOrchestrator(fts, vec)) {
             final var r = orch.parallel("ns",

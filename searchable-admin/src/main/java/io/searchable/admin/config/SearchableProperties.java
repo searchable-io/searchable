@@ -5,6 +5,7 @@ import jakarta.annotation.PostConstruct;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.nio.file.Path;
+import java.time.Duration;
 
 /**
  * Maps {@code searchable.*} properties from {@code application.properties}.
@@ -115,6 +116,28 @@ public class SearchableProperties {
         public void setDirectory(final Path v) { this.directory = v; }
         public io.searchable.core.infrastructure.lucene.StorageBackend getBackend() { return backend; }
         public void setBackend(final io.searchable.core.infrastructure.lucene.StorageBackend v) { this.backend = v; }
+        public Retention getRetention() { return retention; }
+        public void setRetention(final Retention v) { this.retention = v; }
+
+        private Retention retention = new Retention();
+    }
+
+    /**
+     * How many old index generations survive a rebuild.
+     *
+     * <p>A generation is kept when it is among the newest {@code generations}
+     * or was created within {@code max-age}; the active generation is always
+     * kept. The defaults keep only the active generation, which is what
+     * releases before this setting did.
+     */
+    public static class Retention {
+        private int generations = 1;
+        private Duration maxAge = Duration.ZERO;
+
+        public int getGenerations() { return generations; }
+        public void setGenerations(final int v) { this.generations = v; }
+        public Duration getMaxAge() { return maxAge; }
+        public void setMaxAge(final Duration v) { this.maxAge = v; }
     }
 
     /** Plugin loader settings. */
